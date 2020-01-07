@@ -1,0 +1,2 @@
+/usr/local/lib64/python3.7/site-packages/ndarray.cpython-37m-x86_64-linux-gnu.so
+/usr/local/lib64/python3.7/site-packages/ndarray-1.0-py3.7.egg-info
