@@ -96,12 +96,11 @@ PyArray_init(PyArrayObject *self, PyObject *args, PyObject *kwds)
     return 0;
 }
 
-/* Methods */
+/* Getters and Setters */
 
 static PyObject *
 PyArray_shape(PyArrayObject *self)
 {
-    //Change this to an attribute later
     PyObject *list = Py_BuildValue("[]");
     if (list == NULL) {
         Py_XDECREF(list);
@@ -121,7 +120,6 @@ PyArray_shape(PyArrayObject *self)
 static PyObject *
 PyArray_strides(PyArrayObject *self)
 {
-    //Change this to an attribute later
     PyObject *list = Py_BuildValue("[]");
     if (list == NULL) {
         Py_XDECREF(list);
@@ -137,6 +135,24 @@ PyArray_strides(PyArrayObject *self)
     Py_DECREF(list);
     return tuple;
 }
+
+static PyObject *
+PyArray_ndim(PyArrayObject *self)
+{
+    return PyLong_FromLong((long) self->nd);
+}
+
+static PyGetSetDef PyArray_getsetters[] = {
+    {"shape", (getter) PyArray_shape, NULL,
+    "Returns the length of the first dimension", NULL},
+    {"strides", (getter) PyArray_strides, NULL,
+    "Returns the strides of the ndarray", NULL},
+    {"ndim", (getter) PyArray_ndim, NULL,
+    "Returns the number of dimensions", NULL},
+    {NULL} /* Sentinel */
+};
+
+/* Methods */
 
 static PyObject *
 PyArray_copy(PyArrayObject *self)
@@ -162,17 +178,18 @@ PyArray_copy(PyArrayObject *self)
 }
 
 static PyMethodDef PyArray_methods[] = {
-    {"shape", (PyCFunction) PyArray_shape, METH_NOARGS,
-    "Returns the length of the first dimension"
-    },
-    {"strides", (PyCFunction) PyArray_strides, METH_NOARGS,
-    "Returns the strides of the ndarray"},
     {"copy", (PyCFunction) PyArray_copy, METH_NOARGS,
     "Returns an identical ndarray within a new memory location"},
     {NULL} /* Sentintel */
 };
 
-/* Sequence methods */
+/* Sequence/Mapping methods */
+
+static int
+PyArray_SetItem(PyObject *self, PyObject *key, PyObject *value)
+{
+    
+}
 
 static PyObject *
 PyArray_GetItem(PyObject *self, PyObject *value)
@@ -205,6 +222,7 @@ static PyTypeObject PyArrayType = {
     .tp_init = (initproc) PyArray_init,
     .tp_dealloc = (destructor) PyArray_dealloc,
     .tp_methods = PyArray_methods,
+    .tp_getset = PyArray_getsetters,
     .tp_as_sequence = &PyArraySequence,
     .tp_as_mapping = &PyArrayMapping
 };
