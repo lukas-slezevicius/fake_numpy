@@ -23,6 +23,58 @@ PyArray_dealloc(PyArrayObject *self)
     Py_TYPE(self)->tp_free((PyObject *) self);
 }
 
+int
+PyArray_AssignDataSize(PyArrayObject *self)
+{
+    switch (self->dtype)
+    {
+        case PyArray_float64:
+            self->data_size = sizeof(double);
+            return 0;
+        case PyArray_int8:
+            self->data_size = 1;
+            return 0;
+        case PyArray_int16:
+            self->data_size = 2;
+            return 0;
+        case PyArray_int32:
+            self->data_size = 4;
+            return 0;
+        case PyArray_int64:
+            self->data_size = 8;
+            return 0;
+        default:
+            PyErr_SetString(PyExc_ValueError,
+                    "dtype argument value not valid");
+            return -1;
+    }
+}
+
+void
+PyArray_AssignStrides(PyArrayObject *self)
+{
+    for (int pos = self->nd - 1; pos >= 0; pos--) {
+        if (pos == self->nd - 1) {
+            self->strides[pos] = self->data_size;
+        } else {
+            self->strides[pos] = self->dimensions[pos+1] * self->strides[pos+1];
+        }
+    }
+}
+
+int
+PyArray_UpdateDataType(PyArrayObject *self, int dtype)
+{
+    int old_dtype = dtype;
+    self->dtype = dtype;
+    if (PyArray_AssignDataSize(self) < 0) {
+        self->dtype = old_dtype;
+        return -1;
+    }
+    PyArray_AssignStrides(self);
+    return 0;
+}
+
 static int
 PyArray_init(PyArrayObject *self, PyObject *args, PyObject *kwds)
 {
@@ -38,32 +90,13 @@ PyArray_init(PyArrayObject *self, PyObject *args, PyObject *kwds)
     if (!PyTuple_CheckExact(tuple)) {
         PyErr_SetString(PyExc_ValueError,
                 "ndarray expects tuple as the first argument");
-        Py_XDECREF(tuple);
+        Py_DECREF(tuple);
         return -1;
     }
     self->dtype = dtype;
-    switch (self->dtype)
-    {
-        case PyArray_float64:
-            self->data_size = sizeof(double);
-            break;
-        case PyArray_int8:
-            self->data_size = 1;
-            break;
-        case PyArray_int16:
-            self->data_size = 2;
-            break;
-        case PyArray_int32:
-            self->data_size = 4;
-            break;
-        case PyArray_int64:
-            self->data_size = 8;
-            break;
-        default:
-            PyErr_SetString(PyExc_ValueError,
-                    "dtype argument value not valid");
-            Py_DECREF(tuple);
-            return -1;
+    if (PyArray_AssignDataSize(self) < 0) {
+        Py_DECREF(tuple);
+        return -1;
     }
     int tuple_len = (int) PyTuple_GET_SIZE(tuple);
     self->nd = tuple_len;
@@ -86,13 +119,7 @@ PyArray_init(PyArrayObject *self, PyObject *args, PyObject *kwds)
         PyErr_NoMemory();
         return -1;
     }
-    for (int pos = self->nd - 1; pos >= 0; pos--) {
-        if (pos == self->nd - 1) {
-            self->strides[pos] = self->data_size;
-        } else {
-            self->strides[pos] = self->dimensions[pos+1] * self->strides[pos+1];
-        }
-    }
+    PyArray_AssignStrides(self);
     return 0;
 }
 
@@ -103,12 +130,11 @@ PyArray_shape(PyArrayObject *self)
 {
     PyObject *list = Py_BuildValue("[]");
     if (list == NULL) {
-        Py_XDECREF(list);
         return NULL;
     }
     for (int i = 0; i < self->nd; i++) {
         if (PyList_Append(list, PyLong_FromLong(self->dimensions[i])) < 0) {
-            Py_XDECREF(list);
+            Py_DECREF(list);
             return NULL;
         }
     }
@@ -122,12 +148,11 @@ PyArray_strides(PyArrayObject *self)
 {
     PyObject *list = Py_BuildValue("[]");
     if (list == NULL) {
-        Py_XDECREF(list);
         return NULL;
     }
     for (int i = 0; i < self->nd; i++) {
         if (PyList_Append(list, PyLong_FromLong(self->strides[i])) < 0) {
-            Py_XDECREF(list);
+            Py_DECREF(list);
             return NULL;
         }
     }
@@ -173,7 +198,7 @@ PyArray_copy(PyArrayObject *self)
     for (int d = 0; d < ndarray_obj->nd; d++)
         dim_prod *= ndarray_obj->dimensions[d];
     for (int i = 0; i < dim_prod; i++)
-        ndarray_obj->data[i] = ((PyArrayObject *) self)->data[i];
+        ndarray_obj->data[i] = self->data[i];
     return (PyObject *) ndarray_obj;
 }
 
@@ -194,8 +219,42 @@ PyArray_SetItem(PyObject *self, PyObject *key, PyObject *value)
 static PyObject *
 PyArray_GetItem(PyObject *self, PyObject *value)
 {
-    int i = (int) PyLong_AsLong(value);
-    return PyLong_FromLong((long) ((PyArrayObject *)self)->data[i]);
+    int i = (int) PyLong_AsLong(value) * ((PyArrayObject *)self)->data_size;
+    switch (((PyArrayObject *)self)->dtype) {
+        case 0:
+            {
+            double tmp_val;
+            memcpy(&tmp_val, &((PyArrayObject *)self)->data[i], sizeof(double));
+            return PyFloat_FromDouble(tmp_val);
+            }
+        case 1:
+            {
+            int8_t tmp_val;
+            memcpy(&tmp_val, &((PyArrayObject *)self)->data[i], sizeof(int8_t));
+            return PyLong_FromLong(tmp_val);
+            }
+        case 2:
+            {
+            int16_t tmp_val;
+            memcpy(&tmp_val, &((PyArrayObject *)self)->data[i], sizeof(int16_t));
+            return PyLong_FromLong(tmp_val);
+            }
+        case 3:
+            {
+            int32_t tmp_val;
+            memcpy(&tmp_val, &((PyArrayObject *)self)->data[i], sizeof(int32_t));
+            return PyLong_FromLong(tmp_val);
+            }
+        case 4:
+            {
+            int64_t tmp_val;
+            memcpy(&tmp_val, &((PyArrayObject *)self)->data[i], sizeof(int64_t));
+            return PyLong_FromLong(tmp_val);
+            }
+        default:
+            PyErr_SetString(PyExc_SystemError, "Data type incorrect");
+            return NULL;
+    }
 }
 
 static Py_ssize_t
@@ -274,11 +333,70 @@ overwrite_ndarray(PyObject *obj, PyArrayObject *ndarray_obj,
         int depth, int *shape, int *pos, int current_depth)
 {
     if ((int) PyObject_Length(obj) != shape[current_depth]) {
+        /* The object at a given depth does not match the shape */
         PyErr_SetString(PyExc_ValueError, "Inconsistent sequence shape");
         return;
     } else if (current_depth == (depth - 1)) {
-        //Overwrite every element in the given dimension
+        /* Write the obj values at the last depth to the ndarray */
+        int data_idx = 0;
+        for (int i = 0; i < depth - 1; i++) //Index based on strides
+            data_idx += pos[i] * ndarray_obj->strides[i];
+        for (int i = 0; i < shape[depth - 1]; i++) {
+            PyObject *i_obj = Py_BuildValue("i", i);
+            if (i_obj == NULL) {
+                return;
+            }
+            PyObject *new_obj = PyObject_GetItem(obj, i_obj);
+            Py_DECREF(i_obj);
+            if (new_obj == NULL) {
+                return;
+            }
+            switch (ndarray_obj->dtype) {
+                case 0:
+                    {
+                    double tmp_val = PyFloat_AsDouble(new_obj);
+                    memcpy(ndarray_obj->data + data_idx,
+                            &tmp_val, sizeof(double));
+                    break;
+                    }
+                case 1:
+                    {
+                    int8_t tmp_val = PyLong_AsLong(new_obj);
+                    memcpy(ndarray_obj->data + data_idx,
+                            &tmp_val, sizeof(int8_t));
+                    break;
+                    }
+                case 2:
+                    {
+                    int16_t tmp_val = PyLong_AsLong(new_obj);
+                    memcpy(ndarray_obj->data + data_idx,
+                            &tmp_val, sizeof(int16_t));
+                    break;
+                    }
+                case 3:
+                    {
+                    int32_t tmp_val = PyLong_AsLong(new_obj);
+                    memcpy(ndarray_obj->data + data_idx,
+                            &tmp_val, sizeof(int32_t));
+                    break;
+                    }
+                case 4:
+                    {
+                    int64_t tmp_val = PyLong_AsLong(new_obj);
+                    memcpy(ndarray_obj->data + data_idx,
+                            &tmp_val, sizeof(int64_t));
+                    break;
+                    }
+                default:
+                    PyErr_SetString(PyExc_SystemError, "Data type incorrect");
+                    Py_DECREF(new_obj);
+                    return;
+            }
+            Py_DECREF(new_obj);
+            data_idx += ndarray_obj->data_size;
+        }
     } else {
+        /* Traverse to deeper depths if it's a sequence */
         int *tmp = (int *) malloc(sizeof(int) * depth);
         if (tmp == NULL) {
             PyErr_NoMemory();
@@ -290,12 +408,16 @@ overwrite_ndarray(PyObject *obj, PyArrayObject *ndarray_obj,
         int len = (int) PyObject_Length(obj);
         for (int i = 0; i < len; i++) {
             PyObject *i_obj = Py_BuildValue("i", i);
-            if (i_obj == NULL)
+            if (i_obj == NULL) {
+                free(pos);
                 return;
+            }
             PyObject *new_obj = PyObject_GetItem(obj, i_obj);
             Py_DECREF(i_obj);
-            if (new_obj == NULL)
+            if (new_obj == NULL) {
+                free(pos);
                 return;
+            }
             if (!PySequence_Check(new_obj) && !PyMapping_Check(new_obj)) {
                 PyErr_SetString(PyExc_ValueError,
                         "Inconsistent sequence shape");
@@ -315,80 +437,126 @@ overwrite_ndarray(PyObject *obj, PyArrayObject *ndarray_obj,
 static PyObject *
 array(PyObject *self, PyObject *args, PyObject *kwds)
 {
-    //Array interfaces not supported, only sequence-like objects
     PyObject *obj;
-    int copy = 1; //0 unsupported
-    char *keywords[] = {"", "copy", NULL};
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O|p", keywords,
-                &obj, &copy)) {
+    int dtype = -1;
+    int copy = 1;
+    char *keywords[] = {"", "dtype", "copy", NULL};
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O|ip", keywords,
+                &obj, &dtype, &copy)) {
         Py_XDECREF(obj);
         return NULL;
     }
-    if (copy == 0) {
-        PyErr_SetString(PyExc_NotImplementedError, "Copy has to be True");
-        Py_DECREF(obj);
-        return NULL;
-    }
-    int depth = 0;
+
+    /* Check if the provided obj is an ndarray or not sequence-like */
+
     if (PyObject_IsInstance(obj, (PyObject *) &PyArrayType)) {
-        return PyArray_copy((PyArrayObject *) obj);
-    } else if (PySequence_Check(obj) || PyMapping_Check(obj)) {
-        PyObject *zero = Py_BuildValue("i", 0);
-        PyObject *tmp = obj;
-        if (zero == NULL)
-            return NULL;
-        for (int i = 0;; i++) {
-            PyObject *x = tmp;
-            tmp = PyObject_GetItem(tmp, zero);
-            if (i > 0)
-                Py_DECREF(x);
+        if (copy == 1) {
+            PyArrayObject *tmp = (PyArrayObject *) PyArray_copy(
+                    (PyArrayObject *) obj);
             if (tmp == NULL)
                 return NULL;
-            if (!PySequence_Check(tmp) && !PyMapping_Check(tmp)) {
-                Py_DECREF(tmp);
-                break;
+            if (dtype >= 0) {
+                if (PyArray_UpdateDataType(tmp, dtype) < 0)
+                    return NULL;
             }
-            depth += 1;
+            return (PyObject *) tmp;
+        } else {
+            return obj;
         }
-        Py_DECREF(zero);
-    } else {
+    } else if (!PySequence_Check(obj) && !PyMapping_Check(obj)) {
         PyErr_SetString(PyExc_ValueError,
-                "First argument has to provied a __getitem__ method.");
+                "First argument has to provide a __getitem__ method.");
         Py_DECREF(obj);
         return NULL;
     }
-    if (kwds != NULL && PyDict_Contains(kwds, Py_BuildValue("s", "copy"))) {
-        PyDict_DelItemString(kwds, "copy");
-    }
-    PyObject *ndarray_obj = PyObject_Call((PyObject *) &PyArrayType, 
-            Py_BuildValue("((i))", 5), kwds);
-    if (ndarray_obj == NULL)
-        return NULL;
-    int *shape = (int *) malloc(sizeof(int) * depth);
+
+    /* Get the depth */
+
+    int depth = 0;
     PyObject *zero = Py_BuildValue("i", 0);
     PyObject *tmp = obj;
     if (zero == NULL)
         return NULL;
-    for (int i = 0; i < depth; i++) {
-        shape[i] = PyObject_Length(tmp);
-        if (shape[i] < 0)
-            return NULL;
+    for (int i = 0;; i++) {
         PyObject *x = tmp;
         tmp = PyObject_GetItem(tmp, zero);
         if (i > 0)
             Py_DECREF(x);
-        if (tmp == NULL)
+        if (tmp == NULL) {
+            Py_DECREF(zero);
             return NULL;
+        }
+        depth += 1;
+        if (!PySequence_Check(tmp) && !PyMapping_Check(tmp)) {
+            Py_DECREF(zero);
+            Py_DECREF(tmp);
+            break;
+        }
+    }
+    if (kwds != NULL && PyDict_Contains(kwds, Py_BuildValue("s", "copy"))) {
+        if (PyDict_DelItemString(kwds, "copy") < 0) {
+            Py_DECREF(zero);
+            return NULL;
+        }
+    }
+
+    /* Get the shape */
+
+    int *shape = (int *) malloc(sizeof(int) * depth);
+    PyObject *shape_list = Py_BuildValue("[]");
+    if (shape_list == NULL) {
+        Py_DECREF(zero);
+        return NULL;
+    }
+    tmp = obj;
+    for (int i = 0; i < depth; i++) {
+        shape[i] = (int) PyObject_Length(tmp);
+        if (shape[i] < 0) {
+            Py_DECREF(zero);
+            Py_DECREF(shape_list);
+            return NULL;
+        }
+        if (PyList_Append(shape_list, PyLong_FromLong(shape[i])) < 0) {
+            Py_DECREF(shape_list);
+            Py_DECREF(zero);
+            return NULL;
+        }
+        PyObject *x = tmp;
+        tmp = PyObject_GetItem(tmp, zero);
+        if (i > 0)
+            Py_DECREF(x);
+        if (tmp == NULL) {
+            Py_DECREF(zero);
+            Py_DECREF(shape_list);
+            return NULL;
+        }
     }
     Py_DECREF(zero);
+    
+    /* Crate the new ndarray object */
+
+    PyObject *shape_tuple = PyList_AsTuple(shape_list);
+    Py_DECREF(shape_list);
+    if (shape_tuple == NULL)
+        return NULL;
+    PyObject *ndarray_obj = PyObject_Call((PyObject *) &PyArrayType, 
+            Py_BuildValue("(O)", shape_tuple), kwds);
+    Py_DECREF(shape_tuple);
+    if (ndarray_obj == NULL)
+        return NULL;
+
+    /* Write the values of obj to the new ndarray */
+
     int *pos = (int *) malloc(sizeof(int) * depth);
     for (int i = 0; i < depth; i++)
         pos[i] = 0;
     overwrite_ndarray(obj, (PyArrayObject *)ndarray_obj, depth, shape, pos, 0);
-    if (PyErr_Occurred())
-        return NULL;
     free(shape);
     free(pos);
+    if (PyErr_Occurred()) {
+        Py_DECREF(ndarray_obj);
+        return NULL;
+    }
     return ndarray_obj;
 }
 
