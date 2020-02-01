@@ -5,20 +5,23 @@
 
 typedef struct {
     PyObject_HEAD
-    int data_size;
+    int data_size; //Have a more refined way to define dtypes later
     int nd;
     int *dimensions;
     int *strides;
     char *data;
     char dtype;
-    //Offset is required here
+    int base;
+    //Reference counting for views should also be applied
 } PyArrayObject;
 
 static void
 PyArray_dealloc(PyArrayObject *self)
 {
-    free(self->dimensions);
-    free(self->strides);
+    if (self->nd != 0) {
+        free(self->dimensions);
+        free(self->strides);
+    }
     free(self->data);
     Py_TYPE(self)->tp_free((PyObject *) self);
 }
@@ -100,12 +103,14 @@ PyArray_init(PyArrayObject *self, PyObject *args, PyObject *kwds)
     }
     int tuple_len = (int) PyTuple_GET_SIZE(tuple);
     self->nd = tuple_len;
-    self->dimensions = (int *) malloc(sizeof(int) * tuple_len);
-    self->strides = (int *) malloc(sizeof(int) * tuple_len);
-    if (self->dimensions == NULL || self->strides == NULL) {
-        Py_DECREF(tuple);
-        PyErr_NoMemory();
-        return -1;
+    if (self->nd != 0) {
+        self->dimensions = (int *) malloc(sizeof(int) * tuple_len);
+        self->strides = (int *) malloc(sizeof(int) * tuple_len);
+        if (self->dimensions == NULL || self->strides == NULL) {
+            Py_DECREF(tuple);
+            PyErr_NoMemory();
+            return -1;
+        }
     }
     int dim_prod = 1;
     for (int pos = 0; pos < self->nd; pos++) {
@@ -330,6 +335,14 @@ empty(PyObject *self, PyObject *args, PyObject *kwds)
 
 void
 overwrite_ndarray(PyObject *obj, PyArrayObject *ndarray_obj,
+        /* Make an improvement by incrementing pos !!
+         *
+         *
+         *
+         *
+         * potentially much better
+         *
+         */
         int depth, int *shape, int *pos, int current_depth)
 {
     if ((int) PyObject_Length(obj) != shape[current_depth]) {
@@ -438,16 +451,24 @@ static PyObject *
 array(PyObject *self, PyObject *args, PyObject *kwds)
 {
     PyObject *obj;
-    int dtype = -1;
+    PyObject dtype = NULL;
     int copy = 1;
     char *keywords[] = {"", "dtype", "copy", NULL};
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O|ip", keywords,
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O|Op", keywords,
                 &obj, &dtype, &copy)) {
-        Py_XDECREF(obj);
         return NULL;
     }
 
-    /* Check if the provided obj is an ndarray or not sequence-like */
+    //Remove copy from the kwds dict in case it needs to ne used for args
+
+    if (kwds != NULL && PyDict_Contains(kwds, Py_BuildValue("s", "copy"))) {
+        if (PyDict_DelItemString(kwds, "copy") < 0) {
+            Py_DECREF(zero);
+            return NULL;
+        }
+    }
+
+    /* Check if the provided obj is an ndarray or not sequence-like or scalar*/
 
     if (PyObject_IsInstance(obj, (PyObject *) &PyArrayType)) {
         if (copy == 1) {
@@ -463,10 +484,21 @@ array(PyObject *self, PyObject *args, PyObject *kwds)
         } else {
             return obj;
         }
+    } else if (PyLong_Check(obj)){
+        //Create a scalar int64 numpy array
+        PyObject *tuple = Py_BuildValue("()");
+        if (tuple == NULL)
+            return NULL;
+        PyObject *ndarray_obj = PyObject_Call((PyObject *) &PyArrayType, 
+                Py_BuildValue("(O)", tuple), kwds);
+        Py_DECREF(tuple);
+    } else if (PyFloat_Check(obj)){
+        //Create a scalar float64 numpy array
+    } else if (PyComplex_Check(obj)) {
+        //Create a scalar complex128 numpy array
     } else if (!PySequence_Check(obj) && !PyMapping_Check(obj)) {
         PyErr_SetString(PyExc_ValueError,
                 "First argument has to provide a __getitem__ method.");
-        Py_DECREF(obj);
         return NULL;
     }
 
@@ -491,12 +523,6 @@ array(PyObject *self, PyObject *args, PyObject *kwds)
             Py_DECREF(zero);
             Py_DECREF(tmp);
             break;
-        }
-    }
-    if (kwds != NULL && PyDict_Contains(kwds, Py_BuildValue("s", "copy"))) {
-        if (PyDict_DelItemString(kwds, "copy") < 0) {
-            Py_DECREF(zero);
-            return NULL;
         }
     }
 

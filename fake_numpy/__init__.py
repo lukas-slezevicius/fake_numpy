@@ -1,1 +1,1 @@
-from fake_numpy_ndarray import ndarray
+from ndarray import *
